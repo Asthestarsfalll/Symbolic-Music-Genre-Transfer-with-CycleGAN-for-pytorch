@@ -88,9 +88,9 @@ for epoch in range(0, epoch_num):
         real_mixed = torch.FloatTensor(real_mixed)
 
         if torch.cuda.is_available():
-            real_a.cuda()
-            real_b.cuda()
-            real_mixed.cuda()
+            real_a = real_a.cuda()
+            real_b = real_b.cuda()
+            real_mixed = real_mixed.cuda()
 
         # zero the parameter gradients
         optimizer_GA2B.zero_grad()

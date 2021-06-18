@@ -1,0 +1,10 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="AngularCliAddDependency" enabled="true" level="ERROR" enabled_by_default="true" />
+    <inspection_tool class="AngularInaccessibleComponentMemberInAotMode" enabled="true" level="ERROR" enabled_by_default="true" />
+    <inspection_tool class="AngularInsecureBindingToEvent" enabled="true" level="ERROR" enabled_by_default="true" />
+    <inspection_tool class="AngularInvalidExpressionResultType" enabled="true" level="ERROR" enabled_by_default="true" />
+    <inspection_tool class="AngularInvalidI18nAttribute" enabled="true" level="ERROR" enabled_by_default="true" />
+  </profile>
+</component>
