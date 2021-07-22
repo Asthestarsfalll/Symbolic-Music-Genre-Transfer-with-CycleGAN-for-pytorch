@@ -1,3 +1,5 @@
+import os
+import copy
 import numpy as np
 import glob
 import torch
@@ -20,26 +22,37 @@ class ToTensor(object):
 
 
 class MusicDataset(Dataset):
-    def __init__(self, a_dir_list, b_dir_list, mode='full', transform=None):
+    def __init__(self, data_dir, train_mode='CP' ,data_mode='full', is_train: str ='train'):
         super(MusicDataset, self).__init__()
-        self.A_dir = a_dir_list
-        self.B_dir = b_dir_list
-        self.transform = transform
-        assert len(a_dir_list) == len(b_dir_list), 'the lengths of a and b are different'
-        assert mode in ['partial', 'full'], 'wrong mode was given'
-        if mode == 'partial':
-            self.mixed_dir = a_dir_list + b_dir_list
-        else:
-            self.mixed_dir = glob.glob('./traindata/JCP_mixed/*.*')
+        assert train_mode in ['CP', 'JP', 'JC'], 'wrong train mode was given'
+        assert data_mode in ['partial', 'full'], 'wrong data mode was given'
+
+        a_data_dir = train_mode + '_' + train_mode[0]
+        b_data_dir = train_mode + '_' + train_mode[1]
+        print('data_dir',data_dir, a_data_dir, b_data_dir)
+        a_dir = os.path.join(data_dir, a_data_dir, is_train + os.sep)
+        b_dir = os.path.join(data_dir, b_data_dir, is_train + os.sep)
+        print('read data from ', a_dir, b_dir)
+        self.A_list = glob.glob(a_dir + '*' + '.npy')
+        self.B_list = glob.glob(b_dir + '*' + '.npy')
+        self.transform = ToTensor()
+
+        assert len(self.A_list) == len(
+            self.B_list), 'the lengths of a and b are different'
+
+        if is_train == 'test':
+            self.mixed_dir = self.A_list
+        elif data_mode == 'partial':
+            self.mixed_dir = self.A_list + self.B_list
+        elif data_mode == 'full':
+            self.mixed_dir = glob.glob(data_dir + '/JCP_mixed/*.*')
 
     def __len__(self):
-        len_a = len(self.A_dir)
-        len_b = len(self.B_dir)
-        return len_a if len_a < len_b else len_b
+        return len(self.A_list)
 
     def __getitem__(self, idx):
-        bar_a = load_npy(self.A_dir[idx])
-        bar_b = load_npy(self.B_dir[idx])
+        bar_a = load_npy(self.A_list[idx])
+        bar_b = load_npy(self.B_list[idx])
         bar_mixed = load_npy(self.mixed_dir[idx])
         baridx = np.array([idx])
         if len(bar_a.shape) != 3:
@@ -47,9 +60,49 @@ class MusicDataset(Dataset):
         if len(bar_b.shape) != 3:
             bar_b = np.expand_dims(bar_b, axis=2)
 
-        sample = {'baridx': baridx, 'bar_a': bar_a, 'bar_b': bar_b, 'bar_mixed': bar_mixed}
+        sample = {'baridx': baridx, 'bar_a': bar_a,
+                  'bar_b': bar_b, 'bar_mixed': bar_mixed}
 
         if self.transform:
             sample = self.transform(sample)
 
         return sample
+
+    def _get_name(self, idx):
+        data_dir = self.A_list[idx]
+        name = data_dir.split(os.sep)[-1]
+        name = name.split('.')[0]
+        return name
+
+class CustomDataset(Dataset):
+    def __init__(self, data_dir, transform=ToTensor()):
+        assert os.path.exists(data_dir)
+
+        self.data_dir_list = glob.glob(data_dir + "*" + '.npy')
+        self.transform = transform
+    def __getitem__(self, idx):
+        bar_a = load_npy(self.data_dir_list[idx])
+        bar_b = copy.deepcopy(bar_a)
+        bar_mixed = copy.deepcopy(bar_a)
+        baridx = np.array([idx])
+        if len(bar_a.shape) != 3:
+            bar_a = np.expand_dims(bar_a, axis=2)
+        if len(bar_b.shape) != 3:
+            bar_b = np.expand_dims(bar_b, axis=2)
+
+        sample = {'baridx': baridx, 'bar_a': bar_a,
+                  'bar_b': bar_b, 'bar_mixed': bar_mixed}
+
+        if self.transform:
+            sample = self.transform(sample)
+
+        return sample
+
+    def __len__(self):
+        return len(self.data_dir_list)
+
+    def _get_name(self, idx):
+        data_dir = self.data_dir_list[idx]
+        name = data_dir.split(os.sep)[-1]
+        name = name.split('.')[0]
+        return name

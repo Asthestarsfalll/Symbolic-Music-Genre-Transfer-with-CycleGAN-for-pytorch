@@ -1,165 +1,252 @@
 import os
-import glob
+import time
+import argparse
+from tensorboardX import SummaryWriter
 from torch import optim
 import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset
-import numpy as np
+from torch.utils.data import DataLoader
 from model import CycleGAN
-from dataloader import MusicDataset, ToTensor
+from dataloader import MusicDataset
+import logging
+from logger import setup_logger
 
-# ------- 1. define loss function --------
 
-l1loss = nn.L1Loss(reduction='mean')
-l2loss = nn.MSELoss(reduction='mean')
+logger = logging.getLogger()
 
-# ------- 2. set the directory of training dataset --------
+def make_parses():
+    parser = argparse.ArgumentParser(description='Trainer')
+    parser.add_argument(
+        '--epoch',
+        default=30,
+        type=int
+    )
+    parser.add_argument(
+        '--start-epoch',
+        default=0,
+        type=int
+    )
+    parser.add_argument(
+        '--batch-size',
+        default=2,
+        type=int
+    )
+    parser.add_argument(
+        '--model-name',
+        default='CP',
+        type=str,
+        help='Optional: CP, JC, JP'
+    )
+    parser.add_argument(
+        '--resume',
+        default='',
+        type=str
+    )
+    parser.add_argument(
+        '--gamma',
+        default=1,
+        type=float
+    )
+    parser.add_argument(
+        '--sigma',
+        default=0.01,
+        type=float
+    )
+    parser.add_argument(
+        '--lamb',
+        default=10,
+        type=float
+    )
+    parser.add_argument(
+        '--sample_size',
+        default=50,
+        type=int
+    )
+    parser.add_argument(
+        '--save-frq',
+        default=1000,
+        type=int
+    )
+    parser.add_argument(
+        '--log_frq',
+        default=200,
+        type=int
+    )
+    parser.add_argument(
+        '--lr',
+        default=0.002,
+        type=float
+    )
+    parser.add_argument(
+        '--wd', '--weight-decay',
+        default=0,
+        type=float
+    )
+    parser.add_argument(
+        '--data-mode',
+        default='full',
+        type=str,
+        help='Optional: full, '
+    )
+    return parser.parse_args()
 
-model_name = 'JC'  # J       C PC JP
 
-data_dir = os.path.join(os.getcwd(), 'traindata' + os.sep)
-tra_a_dir = os.path.join('JC_C', 'train' + os.sep)
-tra_b_dir = os.path.join('JC_J', 'train' + os.sep)
+def train():
+    # ------- set the directory of training dataset --------
+    args = make_parses()
+    model_name = args.model_name  # JC CP JP.
+    writer = SummaryWriter(comment=model_name+str(time.time()))
 
-model_dir = os.path.join(os.getcwd(), 'saved_models', model_name + os.sep)
-if not os.path.exists(model_dir + model_name):
-    os.makedirs(model_dir + model_name)
+    data_dir = os.path.join(os.getcwd(), 'data' + os.sep)
 
-epoch_num = 30
-batch_size_train = 1
-batch_size_val = 1
-val_num = 0
-gamma = 1
 
-tra_a_name_list = glob.glob(data_dir + tra_a_dir + '*.*')
-tra_b_name_list = glob.glob(data_dir + tra_b_dir + '*.*')
+    model_dir = os.path.join(os.getcwd(), 'saved_models', model_name + os.sep)
+    if not os.path.exists(model_dir):
+        os.makedirs(model_dir)
 
-print('--' * 20)
-print('A: ', len(tra_a_name_list))
-print('B: ', len(tra_b_name_list))
-train_num = len(tra_a_name_list)
-print('--' * 20)
+    epoch_num = args.epoch
+    batch_size_train = args.batch_size
+    gamma = args.gamma
+    save_frq = args.save_frq
+    log_frq = args.log_frq
 
-music_dataset = MusicDataset(
-    a_dir_list=tra_a_name_list,
-    b_dir_list=tra_b_name_list,
-    transform=ToTensor())
-music_dataloader = DataLoader(
-    music_dataset, batch_size=batch_size_train, shuffle=True, num_workers=0)
+    music_dataset = MusicDataset(data_dir, train_mode=model_name, data_mode=args.data_mode, is_train='train')
+    train_num = len(music_dataset)
+    logger.info("train data contains 2*{} items".format(train_num))
+    music_dataloader = DataLoader(
+        music_dataset, batch_size=batch_size_train, shuffle=True, num_workers=0)
+    setup_logger(model_dir)
 
-# ------- 3. define model --------
-net = CycleGAN(sigma=0.01, sample_size=50, lamb=10, mode='train')
+    logger.info("load model with mode {}".format(model_name))
 
-if torch.cuda.is_available():
-    os.environ["CUDA_VISIBLE_DEVICES"] = '0'
-    net.cuda()
+    # ------- define model --------
+    model = CycleGAN(sigma=args.sigma, sample_size=args.sample_size, lamb=args.lamb, mode='train')
+    if args.resume:
+        checkpoint = torch.load(args.resume)
+        args.start_epoch = checkpoint['epoch']
+        if 'model_name' in checkpoint.keys():
+            assert model_name == checkpoint['model_name']
+        model.load_state_dict(checkpoint['state_dict'])
 
-print("---define optimizer...")
-optimizer_GA2B = optim.Adam(net.G_A2B.parameters(), lr=0.0002, betas=(
-    0.5, 0.999), eps=1e-08, weight_decay=0)
-optimizer_GB2A = optim.Adam(net.G_B2A.parameters(), lr=0.0002, betas=(
-    0.5, 0.999), eps=1e-08, weight_decay=0)
-optimizer_DA = optim.Adam(net.D_A.parameters(), lr=0.0002, betas=(
-    0.5, 0.999), eps=1e-08, weight_decay=0)
-optimizer_DB = optim.Adam(net.D_B.parameters(), lr=0.0002, betas=(
-    0.5, 0.999), eps=1e-08, weight_decay=0)
-optimizer_DA_all = optim.Adam(net.D_A_all.parameters(), lr=0.0002, betas=(
-    0.5, 0.999), eps=1e-08, weight_decay=0)
-optimizer_DB_all = optim.Adam(net.D_B_all.parameters(), lr=0.0002, betas=(
-    0.5, 0.999), eps=1e-08, weight_decay=0)
+    if torch.cuda.is_available():
+        model.cuda()
 
-# ------- 5. training process --------
-print("---start training...")
-ite = 0
-g_running_loss = 0.0
-d_running_loss = 0.0
-ite_num4val = 0
-save_frq = 5000
+    logger.info("---define optimizer---")
+    lr = args.lr
+    wd = args.wd
+    optimizer_GA2B = optim.Adam(model.G_A2B.parameters(), lr=lr, betas=(
+        0.5, 0.999), eps=1e-08, weight_decay=wd)
+    optimizer_GB2A = optim.Adam(model.G_B2A.parameters(), lr=lr, betas=(
+        0.5, 0.999), eps=1e-08, weight_decay=wd)
+    optimizer_DA = optim.Adam(model.D_A.parameters(), lr=lr, betas=(
+        0.5, 0.999), eps=1e-08, weight_decay=wd)
+    optimizer_DB = optim.Adam(model.D_B.parameters(), lr=lr, betas=(
+        0.5, 0.999), eps=1e-08, weight_decay=wd)
+    optimizer_DA_all = optim.Adam(model.D_A_all.parameters(), lr=lr, betas=(
+        0.5, 0.999), eps=1e-08, weight_decay=wd)
+    optimizer_DB_all = optim.Adam(model.D_B_all.parameters(), lr=lr, betas=(
+        0.5, 0.999), eps=1e-08, weight_decay=wd)
 
-for epoch in range(0, epoch_num):
-    net.train()
+    # ------- training process --------
+    logger.info("---start training---")
+    ite = 0
+    g_running_loss = 0.0
+    d_running_loss = 0.0
+    ite_num4val = 0
 
-    for i, data in enumerate(music_dataloader):
-        ite = ite + 1
-        ite_num4val = ite_num4val + 1
-        real_a, real_b, real_mixed = data['bar_a'], data['bar_b'], data['bar_mixed']
-        real_a = torch.FloatTensor(real_a)
-        real_b = torch.FloatTensor(real_b)
-        real_mixed = torch.FloatTensor(real_mixed)
+    start = time.time()
+    for epoch in range(args.start_epoch, epoch_num):
+        model.train()
+        for i, data in enumerate(music_dataloader):
+            ite = ite + 1
+            ite_num4val = ite_num4val + 1
+            real_a, real_b, real_mixed = data['bar_a'], data['bar_b'], data['bar_mixed']
+            real_a = torch.FloatTensor(real_a)
+            real_b = torch.FloatTensor(real_b)
+            real_mixed = torch.FloatTensor(real_mixed)
 
-        if torch.cuda.is_available():
-            real_a = real_a.cuda()
-            real_b = real_b.cuda()
-            real_mixed = real_mixed.cuda()
+            if torch.cuda.is_available():
+                real_a = real_a.cuda()
+                real_b = real_b.cuda()
+                real_mixed = real_mixed.cuda()
+            # zero the parameter gradients
+            optimizer_GA2B.zero_grad()
+            optimizer_GB2A.zero_grad()
+            optimizer_DA.zero_grad()
+            optimizer_DB.zero_grad()
+            optimizer_DA_all.zero_grad()
+            optimizer_DB_all.zero_grad()
 
-        # zero the parameter gradients
-        optimizer_GA2B.zero_grad()
-        optimizer_GB2A.zero_grad()
-        optimizer_DA.zero_grad()
-        optimizer_DB.zero_grad()
-        optimizer_DA_all.zero_grad()
-        optimizer_DB_all.zero_grad()
+            cycle_loss, g_A2B_loss, g_B2A_loss, d_A_loss, d_B_loss, \
+            d_A_all_loss, d_B_all_loss = model(real_a, real_b, real_mixed)
+            # Generator loss
+            g_loss = g_A2B_loss + g_B2A_loss - cycle_loss
 
-        cycle_loss, DA_real, DB_real, DA_fake, DB_fake, DA_fake_sample, DB_fake_sample, DA_real_all, DB_real_all, DA_fake_all, DB_fake_all = net(
-            real_a, real_b, real_mixed)
+            # Discriminator loss
+            d_loss = d_A_loss + d_B_loss
 
-        # Generator loss
-        g_A2B_loss = l1loss(DB_fake, torch.ones_like(DB_fake)) + cycle_loss
-        g_B2A_loss = l1loss(DA_fake, torch.ones_like(DA_fake)) + cycle_loss
-        g_loss = g_A2B_loss + g_B2A_loss - cycle_loss
+            d_all_loss = d_A_all_loss + d_B_all_loss
+            D_loss = d_loss + gamma * d_all_loss
 
-        # Discriminator loss
-        d_A_loss_real = l2loss(DA_real, torch.ones_like(DA_real))
-        d_A_loss_fake = l2loss(
-            DA_fake_sample, torch.zeros_like(DA_fake_sample))
-        d_A_loss = (d_A_loss_real + d_A_loss_fake) / 2
-        d_B_loss_real = l2loss(DB_real, torch.ones_like(DB_real))
-        d_B_loss_fake = l2loss(
-            DB_fake_sample, torch.zeros_like(DB_fake_sample))
-        d_B_loss = (d_B_loss_real + d_B_loss_fake) / 2
-        d_loss = d_A_loss + d_B_loss
+            g_A2B_loss.backward(retain_graph=True)
+            g_B2A_loss.backward(retain_graph=True)
 
-        d_A_all_loss_real = l2loss(DA_real_all, torch.ones_like(DA_real_all))
-        d_A_all_loss_fake = l2loss(DA_fake_all, torch.zeros_like(DA_fake_all))
-        d_A_all_loss = (d_A_all_loss_real + d_A_all_loss_fake) / 2
-        d_B_all_loss_real = l2loss(DB_real_all, torch.ones_like(DB_real_all))
-        d_B_all_loss_fake = l2loss(DB_fake_all, torch.zeros_like(DB_fake_all))
-        d_B_all_loss = (d_B_all_loss_real + d_B_all_loss_fake) / 2
-        d_all_loss = d_A_all_loss + d_B_all_loss
-        D_loss = d_loss + gamma * d_all_loss
+            d_A_loss.backward(retain_graph=True)
+            d_B_loss.backward(retain_graph=True)
 
-        g_A2B_loss.backward(retain_graph=True)
-        g_B2A_loss.backward(retain_graph=True)
+            d_A_all_loss.backward(retain_graph=True)
+            d_B_all_loss.backward(retain_graph=True)
 
-        d_A_loss.backward(retain_graph=True)
-        d_B_loss.backward(retain_graph=True)
+            optimizer_GA2B.step()
+            optimizer_GB2A.step()
+            optimizer_DA.step()
+            optimizer_DB.step()
+            optimizer_DA_all.step()
+            optimizer_DB_all.step()
 
-        d_A_all_loss.backward(retain_graph=True)
-        d_B_all_loss.backward()
+            g_running_loss += g_loss.data.item()
+            d_running_loss += D_loss.data.item()
 
-        optimizer_GA2B.step()
-        optimizer_GB2A.step()
-        optimizer_DA.step()
-        optimizer_DB.step()
-        optimizer_DA_all.step()
-        optimizer_DB_all.step()
+            writer.add_scalar('cycle_loss', cycle_loss, global_step=ite)
+            writer.add_scalar('g_A2B_loss', g_A2B_loss, global_step=ite)
+            writer.add_scalar('g_B2A_loss', g_B2A_loss, global_step=ite)
+            writer.add_scalar('d_A_loss', d_A_loss, global_step=ite)
+            writer.add_scalar('d_B_loss', d_B_loss, global_step=ite)
+            writer.add_scalar('d_A_all_loss', g_loss, global_step=ite)
+            writer.add_scalar('d_B_all_loss', g_loss, global_step=ite)
+            writer.add_scalar('d_all_loss', g_loss, global_step=ite)
+            writer.add_scalar('D_loss', D_loss, global_step=ite)
 
-        g_running_loss += g_loss.data.item()
-        d_running_loss += D_loss.data.item()
+            del g_A2B_loss, g_B2A_loss, g_loss, d_A_loss, d_B_loss, d_loss, \
+                d_A_all_loss, d_B_all_loss, d_all_loss, D_loss
+            if i % log_frq == 0:
+                end = time.time()
+                logger.info("[epoch: %3d/%3d, "
+                            "batch: %5d/%5d, "
+                            "ite: %d, "
+                            "time: %3f] "
+                            "g_loss : %3f, "
+                            "d_loss : %3f " % (
+                    epoch + 1, epoch_num,
+                    (i) * batch_size_train, train_num,
+                    ite,
+                    end - start,
+                    g_running_loss / ite_num4val,
+                    d_running_loss / ite_num4val))
+                start = end
 
-        del DA_real, DB_real, DA_fake, DB_fake, DA_fake_sample, DB_fake_sample, DA_real_all, DB_real_all, DA_fake_all, DB_fake_all
-        del g_A2B_loss, g_B2A_loss, g_loss, d_A_loss_real, d_A_loss_fake, d_A_loss, d_B_loss_real, d_B_loss_fake, d_B_loss, d_loss, d_A_all_loss_real, d_A_all_loss_fake, d_A_all_loss, d_B_all_loss_real, d_B_all_loss_fake, d_B_all_loss, d_all_loss, D_loss
+            if ite % save_frq == 0:
+                saved_model_name = model_dir + model_name + "_itr_%d_G_%3f_D_%3f.pth" % (
+                    ite, g_running_loss / ite_num4val, d_running_loss / ite_num4val)
+                torch.save({
+                    'epoch': epoch,
+                    'model_name': model_name,
+                    'state_dict': model.state_dict()},
+                    saved_model_name)
+                logger.info("saved model {}".format(saved_model_name))
+                g_running_loss = 0.0
+                d_running_loss = 0.0
+                model.train()
+                ite_num4val = 0
 
-        print("[epoch: %3d/%3d, batch: %5d/%5d, ite: %d] Generator : %3f, Discriminator : %3f " % (
-            epoch +
-            1, epoch_num, (i + 1) *
-            batch_size_train, train_num, ite, g_running_loss / ite_num4val,
-            d_running_loss / ite_num4val))
-
-        if ite % save_frq == 0:
-            torch.save(net, model_dir + model_name + "_itr_%d_G_%3f_D_%3f.pth" % (
-                ite, g_running_loss / ite_num4val, d_running_loss / ite_num4val))
-            g_running_loss = 0.0
-            d_running_loss = 0.0
-            net.train()
-            ite_num4val = 0
+if __name__ =="__main__":
+    train()
